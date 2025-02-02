@@ -78,7 +78,7 @@ app.use(
 // Setup CORS properly
 const allowedOrigins = [
   process.env.ORIGIN, // From .env file (e.g., Netlify URL)
-  "http://localhost:5173", // Local development
+  "https://spectacular-horse-0f5464.netlify.app/auth", // Local development
 ];
 
 app.use(
