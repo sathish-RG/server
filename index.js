@@ -3,8 +3,8 @@ import dotenv from "dotenv";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import mongoose from "mongoose";
-import helmet from 'helmet';
-import compression from 'compression';
+import helmet from "helmet";
+import compression from "compression";
 import authRoutes from "./routes/AuthRoutes.js";
 import contactsRoutes from "./routes/ContactRoutes.js";
 import messagesRoutes from "./routes/MessagesRoute.js";
@@ -20,37 +20,24 @@ const __dirname = path.dirname(__filename);
 // Load environment variables
 dotenv.config();
 
-// Validate environment variables
+// Validate required environment variables
 const validateEnv = () => {
-  const required = [
-    'DATABASE_URL',
-    'PORT',
-    'JWT_KEY',
-    'NODE_ENV',
-    'ORIGIN'
-  ];
-  
-  const missing = required.filter(key => !process.env[key]);
-  
+  const required = ["DATABASE_URL", "PORT", "JWT_KEY", "NODE_ENV", "ORIGIN"];
+  const missing = required.filter((key) => !process.env[key]);
+
   if (missing.length > 0) {
-    console.error('Required environment variables are missing:', missing.join(', '));
-    console.error('Current environment:', {
-      NODE_ENV: process.env.NODE_ENV,
-      PORT: process.env.PORT,
-      DATABASE_URL: process.env.DATABASE_URL ? '[SET]' : '[NOT SET]',
-      ORIGIN: process.env.ORIGIN,
-    });
+    console.error("Missing environment variables:", missing.join(", "));
     process.exit(1);
   }
 };
 
-// Setup directories
+// Setup directories for uploads/logs
 const setupDirectories = async () => {
   const dirs = [
-    path.join(__dirname, 'uploads'),
-    path.join(__dirname, 'uploads/channels'),
-    path.join(__dirname, 'uploads/profiles'),
-    path.join(__dirname, 'logs')
+    path.join(__dirname, "uploads"),
+    path.join(__dirname, "uploads/channels"),
+    path.join(__dirname, "uploads/profiles"),
+    path.join(__dirname, "logs"),
   ];
 
   for (const dir of dirs) {
@@ -65,158 +52,100 @@ const setupDirectories = async () => {
 };
 
 // MongoDB connection
-const connectDB = async (retries = 5) => {
-  const mongooseOptions = {
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-    maxPoolSize: parseInt(process.env.MONGODB_MAX_POOL_SIZE || '10'),
-    connectTimeoutMS: parseInt(process.env.MONGODB_CONNECT_TIMEOUT || '10000'),
-  };
-
-  for (let i = 0; i < retries; i++) {
-    try {
-      console.log(`MongoDB connection attempt ${i + 1}/${retries}`);
-      await mongoose.connect(process.env.DATABASE_URL, mongooseOptions);
-      console.log('MongoDB Connected Successfully');
-      return true;
-    } catch (error) {
-      console.error(`Connection attempt ${i + 1} failed:`, error.message);
-      if (i === retries - 1) throw error;
-      // Exponential backoff
-      const delay = Math.min(1000 * Math.pow(2, i), 10000);
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.DATABASE_URL, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    });
+    console.log("✅ MongoDB Connected Successfully");
+  } catch (error) {
+    console.error("❌ MongoDB Connection Error:", error);
+    process.exit(1);
   }
 };
 
 // Initialize Express app
-const initializeApp = () => {
-  const app = express();
+const app = express();
 
-  // Security middlewares
-  app.use(helmet({
-    crossOriginResourcePolicy: { policy: "cross-origin" }
-  }));
-  
-  // CORS configuration
-  app.use(cors({
-    origin: process.env.ORIGIN,
+// Security middlewares
+app.use(
+  helmet({
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  })
+);
+
+// Setup CORS properly
+const allowedOrigins = [
+  process.env.ORIGIN, // From .env file (e.g., Netlify URL)
+  "http://localhost:5173", // Local development
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error("CORS Not Allowed"));
+      }
+    },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-    exposedHeaders: ['Content-Range', 'X-Content-Range'],
-    maxAge: 600
-  }));
+    methods: ["GET", "POST", "PUT", "DELETE", "PATCH"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 
-  // General middlewares
-  app.use(compression());
-  app.use(express.json({ limit: '10mb' }));
-  app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-  app.use(cookieParser());
+// Other middlewares
+app.use(compression());
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(cookieParser());
 
-  // Serve static files
-  app.use("/uploads", express.static(path.join(__dirname, "uploads"), {
-    maxAge: '1d',
+// Serve static uploads
+app.use(
+  "/uploads",
+  express.static(path.join(__dirname, "uploads"), {
+    maxAge: "1d",
     etag: true,
     setHeaders: (res) => {
-      res.set('X-Content-Type-Options', 'nosniff');
-      res.set('Cache-Control', 'public, max-age=86400');
-    }
-  }));
+      res.set("X-Content-Type-Options", "nosniff");
+      res.set("Cache-Control", "public, max-age=86400");
+    },
+  })
+);
 
-  // Routes
-  app.use("/api/auth", authRoutes);
-  app.use("/api/contacts", contactsRoutes);
-  app.use("/api/messages", messagesRoutes);
-  app.use("/api/channel", channelRoutes);
+// Routes
+app.use("/api/auth", authRoutes);
+app.use("/api/contacts", contactsRoutes);
+app.use("/api/messages", messagesRoutes);
+app.use("/api/channel", channelRoutes);
 
-  // Error handling middleware
-  app.use((err, req, res, next) => {
-    console.error(err.stack);
-    res.status(500).json({
-      message: 'Something went wrong!',
-      error: process.env.NODE_ENV === 'development' ? err.message : 'Internal Server Error'
-    });
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    message: "Something went wrong!",
+    error: process.env.NODE_ENV === "development" ? err.message : "Internal Server Error",
   });
-
-  return app;
-};
-
-// Graceful shutdown handler
-const gracefulShutdown = async (server) => {
-  console.log('\nInitiating graceful shutdown...');
-  
-  try {
-    // Close HTTP server
-    await new Promise((resolve, reject) => {
-      server.close((err) => err ? reject(err) : resolve());
-    });
-    console.log('HTTP server closed');
-
-    // Close MongoDB connection
-    await mongoose.connection.close(false);
-    console.log('MongoDB connection closed');
-
-    console.log('Graceful shutdown completed');
-    process.exit(0);
-  } catch (error) {
-    console.error('Error during shutdown:', error);
-    process.exit(1);
-  }
-};
+});
 
 // Start server
 const startServer = async () => {
   try {
-    // Initial setup
     validateEnv();
     await setupDirectories();
     await connectDB();
 
-    const app = initializeApp();
-    
-    // Start HTTP server
     const server = app.listen(process.env.PORT, () => {
-      const startTime = new Date().toISOString();
-      console.log(`
-Server Information:
-------------------
-Start Time: ${startTime}
-Port: ${process.env.PORT}
-Environment: ${process.env.NODE_ENV}
-MongoDB: Connected
-Node.js Version: ${process.version}
-Platform: ${process.platform}
-`);
+      console.log(`🚀 Server running on port ${process.env.PORT}`);
     });
 
-    // Setup WebSocket
     setupSocket(server);
-
-    // Handle shutdown signals
-    process.on('SIGTERM', () => gracefulShutdown(server));
-    process.on('SIGINT', () => gracefulShutdown(server));
-
-    // Handle uncaught exceptions
-    process.on('uncaughtException', (error) => {
-      console.error('Uncaught Exception:', error);
-      gracefulShutdown(server);
-    });
-
-    // Handle unhandled promise rejections
-    process.on('unhandledRejection', (reason, promise) => {
-      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-      gracefulShutdown(server);
-    });
-
   } catch (error) {
-    console.error('Failed to start server:', error);
+    console.error("❌ Server Startup Error:", error);
     process.exit(1);
   }
 };
 
-// Start the application
-startServer().catch(error => {
-  console.error('Fatal error during startup:', error);
-  process.exit(1);
-});
+startServer();
